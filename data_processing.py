@@ -8,8 +8,8 @@ from time import time
 
 
 # path_templates = '/home/grigorii/Desktop/plates_generator/templates'
-# path_jsons = "/home/grigorii/Desktop/primary_search/2017-10-03T00_00_01__2017-11-01T00_00_00/"
-# path_nn_imgs = '/home/grigorii/Desktop/primary_search/2017-10-03T00_00_01__2017-11-01T00_00_00/nn_images'
+# path_jsons = "/home/grigorii/Desktop/2017-10-03T00_00_01__2017-11-01T00_00_00/"
+# path_nn_imgs = '/home/grigorii/Desktop/2017-10-03T00_00_01__2017-11-01T00_00_00/nn_images'
 # path_to_save = '/home/grigorii/Desktop/plates_generator/generated'
 # path_imgs_generated = '/home/grigorii/Desktop/plates_generator/generated'
 # path_npy = '/home/grigorii/Desktop/plates_generator/npy'
@@ -24,6 +24,9 @@ alphabet = ['A', 'B', 'C', 'E', 'H', 'K', 'M', 'O', 'P', 'T', 'X', 'Y',
             '0', '1', '2', '3', '4', '5', '6', '7', '8', '9']
 alphabet_ru = ['А', 'В', 'С', 'Е', 'Н', 'К', 'М', 'О', 'Р', 'Т', 'Х', 'У',
               '0', '1', '2', '3', '4', '5', '6', '7', '8', '9']
+
+shift = 5 # increase borders when cropping plates
+
 area_number = (60, 126, 350, 1335) # whole area for 6 first elements on a plate
 area_region_2 = (43, 1502, 261, 1793) # region area
 area_region_3 = (43, 1376, 261, 1818) # region area
@@ -46,20 +49,26 @@ dist_dig_r_3 = 29 # distance between digits (-//- == 3)
 num_steps = {7: 1, 8: 2, 9: 3}
 resize = (30, 150)
 num_to_create_in_generated_folder = 100
-num_train = 200000
+num_train = 30000
 num_valid = 100
 
 
-def assertion(elements, flag):
+def printing(s):
+    print('-' * 30)
+    print(s)
+    print('-' * 30)
+
+
+def assert_plate(elements, flag):
     if len(elements) == 9 and flag:
         return True
     if (len(elements) == 7 or len(elements) == 8) and not flag:
         return True
-    return False
+    raise ValueError('num of symbols on plate is not 7, 8 or 9, real num is {}'.format(len(elements)))
 
 
 def get_plate_img(elements, is_region_3):
-    assert assertion(elements, is_region_3)
+    assert_plate(elements, is_region_3)
 
     if is_region_3:
         dist_let_dig = dist_let_dig_3
@@ -125,14 +134,12 @@ def all_images_file():
     all_images = {}
 
     if not os.path.exists('all_images.json'):
-        print('Creating all_images file...')
+        printing('Creating all_images file...')
         files = os.listdir(path_jsons)
         json_list = []
         for file in files:
             if file.endswith(".json"):
                 json_list.append(file)
-
-        shift = 5
 
         data_all = []
         for json_file in json_list:
@@ -169,7 +176,7 @@ def all_images_file():
             json.dump(all_images, fp)
 
     else:
-        print('all_images file already exists')
+        printing('all_images file already exists')
         with open('all_images.json', 'r') as fp:
             all_images = json.load(fp)
 
@@ -179,11 +186,11 @@ def all_images_file():
 def create_images():
     check = os.listdir(path_imgs_generated)
     if check:
-        print('images in `generated` folder already exist')
+        printing('images in `generated` folder already exist')
         return
 
     all_images = all_images_file()
-    print('Creating images in `generated` folder...')
+    printing('Creating images in `generated` folder...')
 
     list_to_create = [key for key in all_images.keys()]
     shuffle(list_to_create)
@@ -211,18 +218,18 @@ def create_images():
         temp = get_plate_img(number, flag)
         cv2.imwrite(join(path_to_save, str(i) + '_temp.jpg'), temp)
 
-    print('Portion of NoneType: {:.5f}'.format(num_missed_NoneType / num_to_create_in_generated_folder))
+        printing('Portion of NoneType: {:.5f}'.format(num_missed_NoneType / num_to_create_in_generated_folder))
 
 
 def create_npy():
-    if os.path.exists(join(path_npy, 'data.npy')):
-        print('npy files already exist')
+    if os.path.exists(join(path_npy, 'validation_trg.npy')):
+        printing('npy files already exist')
         return
 
     images = os.listdir(path_imgs_generated)
     total = round(len(images) / 2)
 
-    print('Creating npy files...')
+    printing('Creating npy files...')
     i = 0
     list_imgs_trg = []
     list_imgs_inp = []
@@ -271,19 +278,29 @@ def create_npy():
 
 
 def load_npy():
-    imgs_target = np.load(join(path_npy, 'validation_trg.npy'))
     imgs_input = np.load(join(path_npy, 'validation_inp.npy'))
+    imgs_target = np.load(join(path_npy, 'validation_trg.npy'))
     return imgs_input, imgs_target
 
 
 def check_images_existence(images):
     count = 0
+    len_before = len(images)
     new_list = images.copy()
     for item in new_list:
         if not exists(join(path_nn_imgs, item)):
             images.remove(item)
             count += 1
-    print('{} image(-s) deleted from dataset'.format(count))
+    len_after = len(images)
+    printing('images before - {}, images after - {}, difference - {}'.format(len_before, len_after, count))
+
+
+def check_area(area_):
+    # some areas extracted from json have negative values (what the fuck)
+    if area_[0] < 0:
+        area_[0] = 0
+    if area_[1] < 0:
+        area_[1] = 0
 
 
 def import_images_train_valid():
@@ -316,11 +333,11 @@ def generator(batch_size, images_train, images_dict):
                 else:
                     flag = False
 
-                # if img is None:
-                #     num_missed_NoneType += 1
-                #     continue
-
                 img_trg = cv2.imread(join(path_nn_imgs, item), 0)
+                area = images_dict[item]['coords']
+                check_area(area)
+                img_trg = img_trg[area[1]:area[3], area[0]:area[2]]
+
                 img_inp = get_plate_img(number, flag)
 
                 img_trg = cv2.resize(img_trg, (resize[1], resize[0]))
@@ -331,7 +348,6 @@ def generator(batch_size, images_train, images_dict):
 
                 img_trg = img_trg.flatten()
                 img_inp = img_inp.flatten()
-
                 img_trg = np.reshape(img_trg, (1, img_trg.shape[0]))
                 img_inp = np.reshape(img_inp, (1, img_inp.shape[0]))
 
@@ -342,8 +358,3 @@ def generator(batch_size, images_train, images_dict):
                 imgs_input[j] = img_inp
 
             yield (imgs_input, imgs_target)
-
-
-# if __name__ == '__main__':
-#     create_images()
-#     create_npy()
