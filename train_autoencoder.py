@@ -9,8 +9,8 @@ from keras.utils import plot_model
 from keras.callbacks import Callback, ModelCheckpoint
 from keras.backend.tensorflow_backend import set_session
 from sklearn.model_selection import train_test_split
-from experiments import path_npy, resize, num_train, import_images_train_valid, \
-    create_images, create_npy, load_npy, generator
+from data_processing import path_npy, resize, num_train, import_images_train_valid, \
+     create_dataset, load_npy, generator
 
 
 path_intermediate_result = '/ssd480/grisha/plates_generation/result_during_training'
@@ -23,13 +23,6 @@ def tf_config():
     config.gpu_options.visible_device_list = "0"
     sess = tf.Session(config=config)
     set_session(sess)
-
-
-def create_dataset():
-    # if generator is utilized, then we need 
-    # these calls for validation dataset creation
-    create_images()
-    create_npy()
 
 
 class TestCallback(Callback):
@@ -47,7 +40,7 @@ class TestCallback(Callback):
 
 def get_callback_img():
     # callback image (one sample only)
-    img_callback = cv2.imread('img_callback.jpg', 0)
+    img_callback = cv2.imread('img_callback_backward.jpg', 0)
     img_callback = cv2.resize(img_callback, (resize[1], resize[0]))
     img_callback = np.divide(img_callback, 255.)
     img_callback = img_callback.flatten()
@@ -59,9 +52,10 @@ def get_callback_img():
 def train():
     create_dataset()
 
-    # X, Y = load_npy()
-    # x_train, x_test, y_train, y_test = train_test_split(X, Y, test_size=0.05, random_state=42)
-    # input_dim = len(X[1])
+    # Part for IN-MEMORY training (without generator)
+    Y, X = load_npy()
+    x_train, x_test, y_train, y_test = train_test_split(X, Y, test_size=0.05, random_state=42)
+
     input_dim = resize[0] * resize[1]
 
     encoding_1 = 1000
@@ -69,7 +63,7 @@ def train():
     encoding_3 = 50
 
     input_ = Input(shape=(input_dim,))
-    #TODO add regularization
+    # TODO add regularization
     # encoded = Dense(encoding_1, activation='sigmoid', activity_regularizer=regularizers.l2(1e-5))(input_)
     # encoded = Dense(encoding_2, activation='sigmoid', activity_regularizer=regularizers.l2(1e-5))(encoded)
     encoded = Dense(encoding_1, activation='sigmoid')(input_)
@@ -85,36 +79,36 @@ def train():
     decoded = BatchNormalization()(decoded)
     decoded = Dense(input_dim, activation='sigmoid',)(decoded)
 
-    e = 10
+    e = 40
     batch = 512
-    lr = 1e-3
+    lr = 1e-4
 
     autoencoder = Model(input_, decoded)
     plot_model(autoencoder, to_file='model.png', show_shapes=True, show_layer_names=True)
     model_checkpoint = ModelCheckpoint('weights.h5', monitor='val_loss', save_best_only=True)
     autoencoder.compile(optimizer=optimizers.Adam(lr=lr), loss=losses.binary_crossentropy)
-
-    # autoencoder.fit(x_train, y_train,
-    #                 epochs=e,
-    #                 batch_size=batch,
-    #                 shuffle=True,
-    #                 validation_data=(x_test, y_test),
-    #                 callbacks=[model_checkpoint])
-
-    #TODO add EarlyStopping callback
-    #TODO add LearningRateScheduler or ReduceLROnPlateau callback
-    images_train, _, images_dict = import_images_train_valid()
-    validation_inp, validation_trg = load_npy()
-
     img_callback = get_callback_img()
 
-    autoencoder.fit_generator(generator(batch_size=batch, images_train=images_train, images_dict=images_dict),
-                              steps_per_epoch=round(num_train / batch),
-                              epochs=e,
-                              shuffle=True,
-                              validation_data=(validation_inp, validation_trg),
-                              verbose=1,
-                              callbacks=[model_checkpoint, TestCallback(img_callback)])
+    autoencoder.fit(x_train, y_train,
+                    epochs=e,
+                    batch_size=batch,
+                    shuffle=True,
+                    validation_data=(x_test, y_test),
+                    callbacks=[model_checkpoint, TestCallback(img_callback)])
+
+    # TODO add EarlyStopping callback
+    # TODO add LearningRateScheduler or ReduceLROnPlateau callback
+    # Part for OUT-MEMORY training (with generator)
+    # images_train, _, images_dict = import_images_train_valid()
+    # validation_inp, validation_trg = load_npy()
+
+    # autoencoder.fit_generator(generator(batch_size=batch, images_train=images_train, images_dict=images_dict),
+    #                           steps_per_epoch=round(num_train / batch),
+    #                           epochs=e,
+    #                           shuffle=True,
+    #                           validation_data=(validation_inp, validation_trg),
+    #                           verbose=1,
+    #                           callbacks=[model_checkpoint, TestCallback(img_callback)])
     print('\nDONE\n')
 
 

@@ -1,9 +1,10 @@
 import cv2
 from os.path import join, exists
-from random import shuffle
+from random import shuffle, choice
 import os
 import json
 import numpy as np
+from utils.unet import img_cols, img_rows
 from time import time
 
 
@@ -13,26 +14,44 @@ from time import time
 # path_to_save = '/home/grigorii/Desktop/plates_generator/generated'
 # path_imgs_generated = '/home/grigorii/Desktop/plates_generator/generated'
 # path_npy = '/home/grigorii/Desktop/plates_generator/npy'
+# path_to_cascade = "/home/grigorii/ssd480/talos/python/platedetection/haar/cascade_inversed_plates.xml"
 path_templates = '/ssd480/grisha/plates_generation/templates'
 path_jsons = "/ssd480/data/metadata/"
 path_nn_imgs = '/ssd480/data/nn_images'
-path_to_save = '/ssd480/grisha/plates_generation/generated'
-path_imgs_generated = '/ssd480/grisha/plates_generation/generated'
+path_to_save = '/ssd480/grisha/plates_generation/generated_400000_cropped_VJ'
+path_imgs_generated = '/ssd480/grisha/plates_generation/generated_400000_cropped_VJ'
 path_npy = '/ssd480/grisha/plates_generation/npy'
+path_to_cascade = "/ssd480/talos/python/platedetection/haar/cascade_inversed_plates.xml"
 
 alphabet = ['A', 'B', 'C', 'E', 'H', 'K', 'M', 'O', 'P', 'T', 'X', 'Y',
             '0', '1', '2', '3', '4', '5', '6', '7', '8', '9']
 alphabet_ru = ['А', 'В', 'С', 'Е', 'Н', 'К', 'М', 'О', 'Р', 'Т', 'Х', 'У',
               '0', '1', '2', '3', '4', '5', '6', '7', '8', '9']
+digits = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9']
 
 shift = 5 # increase borders when cropping plates
 
+# TODO group parameters on `usual number` and `two-line number`
+# usual vehicle number
 area_number = (60, 126, 350, 1335) # whole area for 6 first elements on a plate
 area_region_2 = (43, 1502, 261, 1793) # region area
 area_region_3 = (43, 1376, 261, 1818) # region area
+# two line vehicle number
+area_number_two_line = (39, 59, 131, 328) # whole area for 6 first elements on a plate
+area_two_line_region_2 = (179, 24, 273, 177) # region area
+area_two_line_region_3 = (179, 218, 273, 346) # region area
 # sizes for the first 6 elements
 lx, ly = 155, 220 # letter's width and height on a plate
 dx, dy = 170, 290 # digit's width and height on a plate
+
+# digit's width and height
+dx_d_two_line = 57
+dy_d_two_line = area_number_two_line[2] - area_number_two_line[0]
+dx_l_two_line = 73 - 5
+dy_l_two_line = area_two_line_region_2[2] - area_two_line_region_2[0] - 5
+dx_r_two_line = 62 - 2
+dy_r_two_line = dy_l_two_line
+
 # when digits num of region <= 2
 dist_let_dig_2 = 67 # distance between letter and digit
 dist_dig_2 = 37 # distance between digits
@@ -47,10 +66,14 @@ dist_dig_r_2 = 29 # distance between digits (num region digits <= 2)
 dist_dig_r_3 = 29 # distance between digits (-//- == 3)
 
 num_steps = {7: 1, 8: 2, 9: 3}
+minSize_ = (50, 10)
+maxSize_ = (200, 40)
+
 resize = (30, 150)
-num_to_create_in_generated_folder = 100
-num_train = 30000
+num_to_create_in_generated_folder = 500000
+num_train = 10000
 num_valid = 100
+num_imgs_unet = 200000
 
 
 def printing(s):
@@ -59,17 +82,7 @@ def printing(s):
     print('-' * 30)
 
 
-def assert_plate(elements, flag):
-    if len(elements) == 9 and flag:
-        return True
-    if (len(elements) == 7 or len(elements) == 8) and not flag:
-        return True
-    raise ValueError('num of symbols on plate is not 7, 8 or 9, real num is {}'.format(len(elements)))
-
-
-def get_plate_img(elements, is_region_3):
-    assert_plate(elements, is_region_3)
-
+def get_one_line_plate_img(elements, is_region_3):
     if is_region_3:
         dist_let_dig = dist_let_dig_3
         dist_dig = dist_dig_3
@@ -95,7 +108,7 @@ def get_plate_img(elements, is_region_3):
     for i in range(3):
         img = cv2.imread(join(path_templates, elements[i+1] + '.png'), 0)
         img = cv2.resize(img, (dx, dy))
-        #TODO put out of the loop
+        # TODO put out of the loop
         shift_dy = area_number[2] - dy
         shift_dx = cur_x_pos
         temp[shift_dy:shift_dy + img.shape[0], shift_dx:shift_dx + img.shape[1]] = img
@@ -107,7 +120,7 @@ def get_plate_img(elements, is_region_3):
     for i in range(2):
         img = cv2.imread(join(path_templates, elements[i+4] + '.png'), 0)
         img = cv2.resize(img, (lx, ly))
-        #TODO put out of the loop
+        # TODO put out of the loop
         shift_dy = area_number[2] - ly
         shift_dx = cur_x_pos
         temp[shift_dy:shift_dy + img.shape[0], shift_dx:shift_dx + img.shape[1]] = img
@@ -127,6 +140,46 @@ def get_plate_img(elements, is_region_3):
         temp[shift_dy:shift_dy + img.shape[0], cur_x_pos:cur_x_pos + img.shape[1]] = img
         cur_x_pos += img.shape[1] + dist
     
+    return temp
+
+
+def get_two_line_plate_img(elements):
+    template_name = 'template_two_line.jpg'
+    temp = cv2.imread(join(path_templates, template_name), 0)
+
+    n = 4
+    dist = round((area_number_two_line[3] - area_number_two_line[1] - n * dx_d_two_line) / (n - 1))
+    shift_dy = area_number_two_line[2] - dy_d_two_line
+    shift_dx = area_number_two_line[1]
+    cur_x_pos = shift_dx
+    for i in range(n):
+        img = cv2.imread(join(path_templates, elements[i] + '.png'), 0)
+        img = cv2.resize(img, (dx_d_two_line, dy_d_two_line))
+        temp[shift_dy:shift_dy + img.shape[0], cur_x_pos:cur_x_pos + img.shape[1]] = img
+        cur_x_pos += img.shape[1] + dist
+
+    n = 2
+    dist = round((area_two_line_region_2[3] - area_two_line_region_2[1] - n * dx_l_two_line) / (n - 1))
+    shift_dy = area_two_line_region_2[2] - dy_l_two_line
+    shift_dx = area_two_line_region_2[1]
+    cur_x_pos = shift_dx
+    for i in range(n):
+        img = cv2.imread(join(path_templates, elements[4 + i] + '.png'), 0)
+        img = cv2.resize(img, (dx_l_two_line, dy_l_two_line))
+        temp[shift_dy:shift_dy + img.shape[0], cur_x_pos:cur_x_pos + img.shape[1]] = img
+        cur_x_pos += img.shape[1] + dist
+
+    n = 2
+    dist = round((area_two_line_region_3[3] - area_two_line_region_3[1] - n * dx_r_two_line) / (n - 1))
+    shift_dy = area_two_line_region_3[2] - dy_r_two_line
+    shift_dx = area_two_line_region_3[1]
+    cur_x_pos = shift_dx
+    for i in range(n):
+        img = cv2.imread(join(path_templates, elements[6 + i] + '.png'), 0)
+        img = cv2.resize(img, (dx_r_two_line, dy_r_two_line))
+        temp[shift_dy:shift_dy + img.shape[0], cur_x_pos:cur_x_pos + img.shape[1]] = img
+        cur_x_pos += img.shape[1] + dist
+
     return temp
 
 
@@ -176,11 +229,17 @@ def all_images_file():
             json.dump(all_images, fp)
 
     else:
-        printing('all_images file already exists')
+        printing('`all_images` file already exists')
         with open('all_images.json', 'r') as fp:
             all_images = json.load(fp)
 
     return all_images
+
+
+def check_img_dimensions(img):
+    for item in img.shape:
+        if item == 0:
+            raise ValueError('img dimension is wrong - {}'.format(img.shape))
 
 
 def create_images():
@@ -190,6 +249,7 @@ def create_images():
         return
 
     all_images = all_images_file()
+    plate_cascade = cv2.CascadeClassifier(path_to_cascade)
     printing('Creating images in `generated` folder...')
 
     list_to_create = [key for key in all_images.keys()]
@@ -213,15 +273,36 @@ def create_images():
             continue
 
         area = all_images[item]['coords']
+        check_area(area)
         cropped_img = img[area[1]:area[3], area[0]:area[2]]
+        check_img_dimensions(cropped_img)
+        
+        # in case num elem on plate < 7 or > 9,
+        # `num_steps` inside `get_one_line_plate_img` dict
+        # throws an exception
+        try:
+            temp = get_one_line_plate_img(number, flag)
+        except:
+            continue
+
+        plates = plate_cascade.detectMultiScale(cropped_img, scaleFactor=1.3, minNeighbors=3,
+                                                minSize=minSize_,
+                                                maxSize=maxSize_)
+        # TODO add to `generate`
+        if len(plates) != 0:
+            (x, y, w, h) = choice(plates)
+            cropped_img = cropped_img[y:y + h, x:x + w]
+
         cv2.imwrite(join(path_to_save, str(i) + '.jpg'), cropped_img)
-        temp = get_plate_img(number, flag)
         cv2.imwrite(join(path_to_save, str(i) + '_temp.jpg'), temp)
 
-        printing('Portion of NoneType: {:.5f}'.format(num_missed_NoneType / num_to_create_in_generated_folder))
+        if i % 5000 == 0:
+            print('{} plates created out of {}'.format(i, num_to_create_in_generated_folder))
+
+    printing('Portion of NoneType: {:.3f}'.format(num_missed_NoneType / num_to_create_in_generated_folder))
 
 
-def create_npy():
+def create_npy_autoenc():
     if os.path.exists(join(path_npy, 'validation_trg.npy')):
         printing('npy files already exist')
         return
@@ -240,11 +321,13 @@ def create_npy():
         img_trg = cv2.imread(join(path_imgs_generated, image_trg_name), 0)
         img_inp = cv2.imread(join(path_imgs_generated, image_input_name), 0)
 
+        # TODO you may delete try except (because we already have check_dimensions)
         try:
             img_trg = cv2.resize(img_trg, (resize[1], resize[0]))
             img_inp = cv2.resize(img_inp, (resize[1], resize[0]))
         except:
-            continue
+            print('Resize error')
+            print('img_trg shape - {}'.format(img_trg.shape))
         
         img_trg = np.divide(img_trg, 255.)
         img_inp = np.divide(img_inp, 255.)
@@ -262,7 +345,7 @@ def create_npy():
 
         i += 1
 
-        if i % 500 == 0:
+        if i % 1000 == 0:
             print('Done: {0}/{1} images'.format(i * 2, total * 2))
 
     imgs_input = np.ndarray((total, resize[0] * resize[1]), dtype=np.float32)
@@ -275,6 +358,64 @@ def create_npy():
 
     np.save(join(path_npy, 'validation_trg.npy'), imgs_target)
     np.save(join(path_npy, 'validation_inp.npy'), imgs_input)
+
+
+def create_npy_unet():
+    if os.path.exists(join(path_npy, 'input_unet.npy')):
+        printing('npy files already exist')
+        return
+
+    images = os.listdir(path_imgs_generated)
+    images.sort()
+    images = images[:num_imgs_unet]
+    total = round(len(images) / 2)
+
+    printing('Creating npy files...')
+    i = 0
+    list_imgs_trg = []
+    list_imgs_inp = []
+
+    for c, image_trg_name in enumerate(images):
+        if 'temp' in image_trg_name:
+            continue
+        image_input_name = image_trg_name.split('.')[0] + '_temp.jpg'
+        img_trg = cv2.imread(join(path_imgs_generated, image_trg_name), 0)
+        img_inp = cv2.imread(join(path_imgs_generated, image_input_name), 0)
+
+        # TODO you may delete try except (because we already have check_dimensions)
+        try:
+            img_trg = cv2.resize(img_trg, (img_rows, img_cols))
+            img_inp = cv2.resize(img_inp, (img_rows, img_cols))
+        except:
+            print('Resize error')
+            print('img_trg shape - {}'.format(img_trg.shape))
+
+        img_trg = np.divide(img_trg, 255.)
+        img_inp = np.divide(img_inp, 255.)
+
+        img_trg = np.array(img_trg, dtype=np.float32)
+        img_inp = np.array(img_inp, dtype=np.float32)
+
+        list_imgs_trg.append(img_trg)
+        list_imgs_inp.append(img_inp)
+
+        i += 1
+
+        if i % 1000 == 0:
+            print('Done: {0}/{1} images'.format(i * 2, total * 2))
+
+    imgs_input = np.ndarray((len(list_imgs_inp), img_rows, img_cols), dtype=np.float32)
+    imgs_target = np.ndarray((len(list_imgs_trg), img_rows, img_cols), dtype=np.float32)
+
+    for i, item in enumerate(list_imgs_trg):
+        imgs_target[i] = item
+    for i, item in enumerate(list_imgs_inp):
+        imgs_input[i] = item
+
+    print('imgs_target shape - {}, imgs_input shape - {}'.format(imgs_target.shape, imgs_input.shape))
+
+    np.save(join(path_npy, 'input_unet.npy'), imgs_target)
+    np.save(join(path_npy, 'target_unet.npy'), imgs_input)
 
 
 def load_npy():
@@ -337,8 +478,13 @@ def generator(batch_size, images_train, images_dict):
                 area = images_dict[item]['coords']
                 check_area(area)
                 img_trg = img_trg[area[1]:area[3], area[0]:area[2]]
-
-                img_inp = get_plate_img(number, flag)
+                check_img_dimensions(img_trg)
+                
+                if len(number) == 6:
+                    number.append(choice(digits))
+                if len(number) < 6 or len(number) > 9:
+                    raise ValueError('num elem on plate is {}'.format(len(number)))
+                img_inp = get_one_line_plate_img(number, flag)
 
                 img_trg = cv2.resize(img_trg, (resize[1], resize[0]))
                 img_inp = cv2.resize(img_inp, (resize[1], resize[0]))
