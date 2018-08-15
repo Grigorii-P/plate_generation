@@ -1,6 +1,6 @@
 import cv2
 from os.path import join, exists
-from random import shuffle, choice
+from random import shuffle, choice, randint, uniform
 import os
 import json
 import numpy as np
@@ -27,6 +27,7 @@ alphabet = ['A', 'B', 'C', 'E', 'H', 'K', 'M', 'O', 'P', 'T', 'X', 'Y',
             '0', '1', '2', '3', '4', '5', '6', '7', '8', '9']
 alphabet_ru = ['А', 'В', 'С', 'Е', 'Н', 'К', 'М', 'О', 'Р', 'Т', 'Х', 'У',
               '0', '1', '2', '3', '4', '5', '6', '7', '8', '9']
+alphabet_letters = ['A', 'B', 'C', 'E', 'H', 'K', 'M', 'O', 'P', 'T', 'X', 'Y']
 digits = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9']
 
 shift = 5 # increase borders when cropping plates
@@ -143,6 +144,25 @@ def get_one_line_plate_img(elements, is_region_3):
     return temp
 
 
+def get_random_one_line_plate():
+    p_3_reg = 0.3
+    num = []
+    num.append(choice(alphabet_letters))
+    for j in range(3):
+        num.append(choice(digits))
+    for j in range(2):
+        num.append(choice(alphabet_letters))
+    if uniform(0, 1) < p_3_reg:
+        reg = list(str(randint(100, 999)))
+        flag = True
+    else:
+        reg = list(str(randint(1, 100)))
+        flag = False
+    num.extend(reg)
+    img = get_one_line_plate_img(num, flag)
+    return img, num
+
+
 def get_two_line_plate_img(elements):
     template_name = 'template_two_line.jpg'
     temp = cv2.imread(join(path_templates, template_name), 0)
@@ -250,7 +270,7 @@ def create_images():
 
     all_images = all_images_file()
     plate_cascade = cv2.CascadeClassifier(path_to_cascade)
-    printing('Creating images in `generated` folder...')
+    printing('Creating images in `{}` folder...'.format(path_imgs_generated))
 
     list_to_create = [key for key in all_images.keys()]
     shuffle(list_to_create)
@@ -288,15 +308,15 @@ def create_images():
         plates = plate_cascade.detectMultiScale(cropped_img, scaleFactor=1.3, minNeighbors=3,
                                                 minSize=minSize_,
                                                 maxSize=maxSize_)
-        # TODO add to `generate`
+        # TODO add to `generator`
         if len(plates) != 0:
             (x, y, w, h) = choice(plates)
             cropped_img = cropped_img[y:y + h, x:x + w]
 
-        cv2.imwrite(join(path_to_save, str(i) + '.jpg'), cropped_img)
-        cv2.imwrite(join(path_to_save, str(i) + '_temp.jpg'), temp)
+        cv2.imwrite(join(path_to_save, item), cropped_img)
+        cv2.imwrite(join(path_to_save, item.split('.')[0] + '_temp.jpg'), temp)
 
-        if i % 5000 == 0:
+        if i % 10000 == 0:
             print('{} plates created out of {}'.format(i, num_to_create_in_generated_folder))
 
     printing('Portion of NoneType: {:.3f}'.format(num_missed_NoneType / num_to_create_in_generated_folder))
@@ -412,10 +432,13 @@ def create_npy_unet():
     for i, item in enumerate(list_imgs_inp):
         imgs_input[i] = item
 
+    imgs_input = imgs_input[..., np.newaxis]
+    imgs_target = imgs_target[..., np.newaxis]
+
     print('imgs_target shape - {}, imgs_input shape - {}'.format(imgs_target.shape, imgs_input.shape))
 
-    np.save(join(path_npy, 'input_unet.npy'), imgs_target)
-    np.save(join(path_npy, 'target_unet.npy'), imgs_input)
+    np.save(join(path_npy, 'input_unet.npy'), imgs_input)
+    np.save(join(path_npy, 'target_unet.npy'), imgs_target)
 
 
 def load_npy():

@@ -10,7 +10,7 @@ from keras.callbacks import Callback, ModelCheckpoint
 from keras.backend.tensorflow_backend import set_session
 from sklearn.model_selection import train_test_split
 from data_processing import path_npy, resize, num_train, import_images_train_valid, \
-     create_dataset, load_npy, generator
+     create_images, create_npy_autoenc, load_npy, generator
 
 
 path_intermediate_result = '/ssd480/grisha/plates_generation/result_during_training'
